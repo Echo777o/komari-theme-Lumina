@@ -125,6 +125,7 @@ export function ThemeManage() {
   const { data: config, isLoading: configLoading } = usePublicConfig();
   const [draftAppearance, setDraftAppearance] = useState<Appearance>("dark");
   const [draftBindings, setDraftBindings] = useState<HomepagePingTaskBindings>({});
+  const [draftNodeOrder, setDraftNodeOrder] = useState<string[]>([]);
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
   const [taskSearch, setTaskSearch] = useState("");
   const [nodeSearch, setNodeSearch] = useState("");
@@ -162,15 +163,32 @@ export function ThemeManage() {
     () => normalizeHomepagePingTaskBindings(config?.theme_settings?.homepagePingBindings),
     [config?.theme_settings?.homepagePingBindings],
   );
+  const sourceNodeOrder = useMemo(
+    () => Array.isArray(config?.theme_settings?.homepageNodeOrder)
+      ? (config?.theme_settings?.homepageNodeOrder as string[])
+      : [],
+    [config?.theme_settings?.homepageNodeOrder],
+  );
 
   useEffect(() => {
     if (!config) return;
     setDraftAppearance(sourceAppearance);
     setDraftBindings(sourceBindings);
-  }, [config, sourceAppearance, sourceBindings]);
+    setDraftNodeOrder(sourceNodeOrder);
+  }, [config, sourceAppearance, sourceBindings, sourceNodeOrder]);
 
   const sortedTasks = useMemo(() => sortTasks(pingTasks ?? []), [pingTasks]);
   const sortedClients = useMemo(() => sortClients(adminClients ?? []), [adminClients]);
+  useEffect(() => {
+    if (sortedClients.length === 0) return;
+    setDraftNodeOrder((prev) => {
+      const known = new Set(sortedClients.map((client) => client.uuid));
+      const filtered = prev.filter((uuid) => known.has(uuid));
+      const missing = sortedClients.map((client) => client.uuid).filter((uuid) => !filtered.includes(uuid));
+      const next = [...filtered, ...missing];
+      return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+    });
+  }, [sortedClients]);
   const clientsById = useMemo(
     () => new Map(sortedClients.map((client) => [client.uuid, client])),
     [sortedClients],
@@ -212,9 +230,12 @@ export function ThemeManage() {
     () => serializeBindings(sourceBindings),
     [sourceBindings],
   );
+  const draftNodeOrderSerialized = useMemo(() => JSON.stringify(draftNodeOrder), [draftNodeOrder]);
+  const sourceNodeOrderSerialized = useMemo(() => JSON.stringify(sourceNodeOrder), [sourceNodeOrder]);
   const isDirty =
     draftAppearance !== sourceAppearance ||
-    draftBindingsSerialized !== sourceBindingsSerialized;
+    draftBindingsSerialized !== sourceBindingsSerialized ||
+    draftNodeOrderSerialized !== sourceNodeOrderSerialized;
 
   const assignedNodeCount = useMemo(
     () => Object.values(draftBindings).reduce((total, clients) => total + clients.length, 0),
@@ -235,6 +256,7 @@ export function ThemeManage() {
         ...baseSettings,
         defaultAppearance: draftAppearance,
         homepagePingBindings: pruneBindings(draftBindings),
+        homepageNodeOrder: draftNodeOrder,
       };
       await saveThemeSettings(config.theme, nextSettings);
       await queryClient.invalidateQueries({ queryKey: ["public"] });
@@ -256,6 +278,7 @@ export function ThemeManage() {
   const handleReset = () => {
     setDraftAppearance(sourceAppearance);
     setDraftBindings(sourceBindings);
+    setDraftNodeOrder(sourceNodeOrder);
     setMessage(null);
     setError(null);
   };
@@ -365,6 +388,75 @@ export function ThemeManage() {
             </button>
           ))}
         </div>
+      </InstancePanel>
+
+      <InstancePanel
+        title="首页卡片顺序"
+        description="调整首页服务器卡片的显示顺序。当前 V1 使用上移 / 下移方式保存顺序，新接入但未配置的节点会自动排在末尾。"
+        aside={
+          <div className="text-[11px] text-[var(--text-tertiary)]">
+            {clientsLoading ? "载入中" : `${sortedClients.length} 个节点`}
+          </div>
+        }
+      >
+        {clientsLoading ? (
+          <div className="flex min-h-[16vh] items-center justify-center">
+            <Spinner size={24} />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {draftNodeOrder.map((uuid, index) => {
+              const client = clientsById.get(uuid);
+              const name = client?.name || uuid;
+              const subtitle = [client?.region, client?.group].filter(Boolean).join(" · ");
+              return (
+                <div
+                  key={uuid}
+                  className="surface-inset flex items-center justify-between gap-3 px-3 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-medium text-[var(--text-primary)]">
+                      {index + 1}. {name}
+                    </div>
+                    <div className="truncate text-[11px] text-[var(--text-tertiary)]">
+                      {subtitle || uuid}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="theme-manage-button is-compact"
+                      disabled={index === 0}
+                      onClick={() => {
+                        setDraftNodeOrder((prev) => {
+                          const next = [...prev];
+                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                          return next;
+                        });
+                      }}
+                    >
+                      上移
+                    </button>
+                    <button
+                      type="button"
+                      className="theme-manage-button is-compact"
+                      disabled={index === draftNodeOrder.length - 1}
+                      onClick={() => {
+                        setDraftNodeOrder((prev) => {
+                          const next = [...prev];
+                          [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                          return next;
+                        });
+                      }}
+                    >
+                      下移
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </InstancePanel>
 
       <InstancePanel
